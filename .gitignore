@@ -1,0 +1,9 @@
+# Python virtual environment
+.venv/
+
+# Downloaded dataset
+data/
+
+# Python cache
+__pycache__/
+*.pyc
