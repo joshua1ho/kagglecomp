@@ -7,9 +7,9 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 
 
-# --------------------------------------------------
-# 1. Define project paths and settings
-# --------------------------------------------------
+# ==================================================
+# 1. PROJECT PATHS AND SETTINGS
+# ==================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_DIR / "data"
@@ -20,10 +20,11 @@ TEST_DIR = DATA_DIR / "test"
 LABELS_FILE = DATA_DIR / "train_labels.csv"
 SUBMISSION_FILE = DATA_DIR / "sample_submission.csv"
 
-# All images will be resized to this size.
+OUTPUT_DIR = DATA_DIR / "processed"
+
+# Image dimensions: width, height
 IMAGE_SIZE = (112, 112)
 
-# Reproducible train/validation split.
 VALIDATION_SIZE = 0.2
 RANDOM_STATE = 42
 
@@ -39,270 +40,510 @@ EXPECTED_CLASSES = [
 ]
 
 
-# --------------------------------------------------
-# 2. Helper functions
-# --------------------------------------------------
+# ==================================================
+# 2. BUILD IMAGE INDEX
+# ==================================================
 
-def get_image_path(folder, image_id):
-    """Find an image by its ID, including nested directories."""
+def build_image_index(folder):
+    """
+    Find images once and create a dictionary mapping
+    each image ID to its file path.
+    """
 
-    filename = f"{int(image_id):05d}.jpg"
-    matches = list(folder.rglob(filename))
+    print(f"\nIndexing images in: {folder}", flush=True)
 
-    if len(matches) == 0:
+    if not folder.exists():
         raise FileNotFoundError(
-            f"Could not find image {filename} in {folder}"
+            f"Image folder does not exist: {folder}"
         )
 
-    if len(matches) > 1:
-        raise ValueError(
-            f"Multiple files named {filename} found in {folder}"
-        )
+    image_index = {}
 
-    return matches[0]
+    supported_extensions = {".jpg", ".jpeg", ".png"}
 
+    for path in folder.rglob("*"):
+
+        if not path.is_file():
+            continue
+
+        if path.suffix.lower() not in supported_extensions:
+            continue
+
+        image_id = path.stem
+
+        if image_id in image_index:
+            raise ValueError(
+                f"Duplicate image ID {image_id} in {folder}"
+            )
+
+        image_index[image_id] = path
+
+    print(
+        f"Found {len(image_index)} images.",
+        flush=True
+    )
+
+    return image_index
+
+
+# ==================================================
+# 3. LOAD AND PREPROCESS ONE IMAGE
+# ==================================================
 
 def load_image(image_path):
-    """Load an image, convert it to RGB, resize it, and scale pixels."""
+    """
+    Open an image, convert it to RGB, resize it,
+    and return uint8 pixel values from 0 to 255.
+    """
 
     with Image.open(image_path) as image:
+
         image = image.convert("RGB")
+
         image = image.resize(
             IMAGE_SIZE,
             Image.Resampling.BILINEAR
         )
 
-        image_array = np.asarray(image, dtype=np.float32)
-
-    # Convert pixel values from 0-255 to 0-1.
-    image_array = image_array / 255.0
+        image_array = np.asarray(
+            image,
+            dtype=np.uint8
+        )
 
     return image_array
 
 
-def load_images_from_ids(image_ids, folder):
-    """Load a list of image IDs into a NumPy array."""
+# ==================================================
+# 4. PROCESS IMAGES DIRECTLY TO DISK
+# ==================================================
 
-    images = []
+def save_images(image_ids, image_index, output_path):
+    """
+    Process images one at a time and save them to
+    a NumPy memory-mapped file.
 
+    This avoids storing the complete image dataset
+    in ordinary RAM.
+    """
+
+    image_ids = np.asarray(image_ids)
     total = len(image_ids)
 
-    for index, image_id in enumerate(image_ids, start=1):
-        image_path = get_image_path(folder, image_id)
-        image_array = load_image(image_path)
-        images.append(image_array)
+    if total == 0:
+        raise ValueError(
+            f"No image IDs supplied for {output_path}"
+        )
 
-        if index % 5000 == 0 or index == total:
-            print(f"Loaded {index}/{total} images from {folder.name}")
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    return np.stack(images).astype(np.float32)
+    print(
+        f"\nProcessing {total} images...",
+        flush=True
+    )
+
+    # uint8 uses 1 byte per colour channel.
+    # open_memmap writes to disk rather than requiring
+    # the complete array to fit in ordinary RAM.
+    output = np.lib.format.open_memmap(
+        output_path,
+        mode="w+",
+        dtype=np.uint8,
+        shape=(
+            total,
+            IMAGE_SIZE[1],
+            IMAGE_SIZE[0],
+            3
+        )
+    )
+
+    try:
+
+        for i, image_id in enumerate(image_ids):
+
+            key = f"{int(image_id):05d}"
+
+            if key not in image_index:
+                raise FileNotFoundError(
+                    f"Image {key} not found."
+                )
+
+            image_path = image_index[key]
+
+            output[i] = load_image(image_path)
+
+            if (
+                (i + 1) % 1000 == 0
+                or i + 1 == total
+            ):
+                print(
+                    f"Processed {i + 1}/{total} images",
+                    flush=True
+                )
+
+        output.flush()
+
+    finally:
+        del output
+
+    print(
+        f"Saved images to: {output_path}",
+        flush=True
+    )
 
 
-# --------------------------------------------------
-# 3. Main preprocessing workflow
-# --------------------------------------------------
+# ==================================================
+# 5. MAIN PREPROCESSING WORKFLOW
+# ==================================================
 
 def main():
 
     print("=" * 60)
-    print("PREPROCESSING")
-    print("=" * 60)
+    print("FACIAL FEATURE PREPROCESSING")
+    print("=" * 60, flush=True)
 
-    # Check paths.
-    for path in [
+    # --------------------------------------------------
+    # Check required files and folders
+    # --------------------------------------------------
+
+    required_paths = [
         TRAIN_DIR,
         TEST_DIR,
         LABELS_FILE,
         SUBMISSION_FILE,
-    ]:
+    ]
+
+    for path in required_paths:
+
         if not path.exists():
             raise FileNotFoundError(
                 f"Required path does not exist: {path}"
             )
 
-    # Load CSV files.
+    # --------------------------------------------------
+    # Load and validate CSV files
+    # --------------------------------------------------
+
     labels_df = pd.read_csv(LABELS_FILE)
     submission_df = pd.read_csv(SUBMISSION_FILE)
 
-    # Validate CSV columns.
-    if not {"image_id", "class"}.issubset(labels_df.columns):
+    if not {"image_id", "class"}.issubset(
+        labels_df.columns
+    ):
         raise ValueError(
-            "Training labels CSV must contain image_id and class."
+            "Training CSV must contain image_id and class."
         )
 
     if "image_id" not in submission_df.columns:
         raise ValueError(
-            "Sample submission CSV must contain image_id."
+            "Sample submission must contain image_id."
         )
 
-    if labels_df[["image_id", "class"]].isnull().any().any():
+    if labels_df[
+        ["image_id", "class"]
+    ].isnull().any().any():
+
         raise ValueError(
-            "Training labels contain missing image IDs or classes."
+            "Training labels contain missing values."
         )
 
     if labels_df["image_id"].duplicated().any():
         raise ValueError(
-            "Training labels contain duplicate image IDs."
+            "Duplicate training image IDs found."
         )
 
     if submission_df["image_id"].isnull().any():
         raise ValueError(
-            "Sample submission contains missing image IDs."
+            "Test submission contains missing image IDs."
         )
 
     if submission_df["image_id"].duplicated().any():
         raise ValueError(
-            "Sample submission contains duplicate image IDs."
+            "Duplicate test image IDs found."
         )
 
-    # Verify class labels.
-    actual_classes = set(labels_df["class"].unique())
-    expected_classes = set(EXPECTED_CLASSES)
+    actual_classes = set(
+        labels_df["class"].unique()
+    )
 
-    if actual_classes != expected_classes:
+    if actual_classes != set(EXPECTED_CLASSES):
         raise ValueError(
-            f"Unexpected class labels. Found: {sorted(actual_classes)}"
+            "Unexpected class labels found: "
+            f"{sorted(actual_classes)}"
         )
 
-    # Use a fixed class-to-number mapping.
+    print("\nCSV validation passed.", flush=True)
+
+    print(
+        "Training label rows:",
+        len(labels_df)
+    )
+
+    print(
+        "Provided test rows:",
+        len(submission_df)
+    )
+
+    # --------------------------------------------------
+    # Create class mappings
+    # --------------------------------------------------
+
     class_to_index = {
         class_name: index
-        for index, class_name in enumerate(EXPECTED_CLASSES)
+        for index, class_name
+        in enumerate(EXPECTED_CLASSES)
     }
 
     index_to_class = {
         index: class_name
-        for class_name, index in class_to_index.items()
+        for class_name, index
+        in class_to_index.items()
     }
 
     print("\nClass-to-index mapping:")
+
     for class_name, index in class_to_index.items():
         print(f"{class_name}: {index}")
 
     # --------------------------------------------------
-    # 4. Split labelled data before preprocessing
+    # Split training data
     # --------------------------------------------------
 
     train_ids, validation_ids = train_test_split(
         labels_df["image_id"].to_numpy(),
         test_size=VALIDATION_SIZE,
         random_state=RANDOM_STATE,
-        stratify=labels_df["class"],
+        stratify=labels_df["class"]
     )
 
-    # Keep labels aligned with their image IDs.
-    labels_by_id = labels_df.set_index("image_id")["class"]
+    # Preserve label-to-image correspondence.
+    labels_by_id = labels_df.set_index(
+        "image_id"
+    )["class"]
 
-    y_train_names = labels_by_id.loc[train_ids].to_numpy()
-    y_validation_names = labels_by_id.loc[validation_ids].to_numpy()
+    y_train_names = labels_by_id.loc[
+        train_ids
+    ].to_numpy()
+
+    y_validation_names = labels_by_id.loc[
+        validation_ids
+    ].to_numpy()
 
     y_train = np.array(
-        [class_to_index[name] for name in y_train_names],
-        dtype=np.int64,
+        [
+            class_to_index[name]
+            for name in y_train_names
+        ],
+        dtype=np.int64
     )
 
     y_validation = np.array(
-        [class_to_index[name] for name in y_validation_names],
-        dtype=np.int64,
+        [
+            class_to_index[name]
+            for name in y_validation_names
+        ],
+        dtype=np.int64
     )
+
+    test_ids = submission_df[
+        "image_id"
+    ].to_numpy()
 
     print("\nSplit sizes:")
-    print("Training samples:", len(train_ids))
-    print("Validation samples:", len(validation_ids))
-    print("Provided test samples:", len(submission_df))
+    print("Training:", len(train_ids))
+    print("Validation:", len(validation_ids))
+    print("Provided test:", len(test_ids))
 
     print("\nTraining class counts:")
-    print(pd.Series(y_train_names).value_counts().sort_index())
+    print(
+        pd.Series(
+            y_train_names
+        ).value_counts().sort_index()
+    )
 
     print("\nValidation class counts:")
-    print(pd.Series(y_validation_names).value_counts().sort_index())
-
-    # --------------------------------------------------
-    # 5. Load and preprocess training images
-    # --------------------------------------------------
-
-    print("\nLoading training images...")
-
-    X_train = load_images_from_ids(train_ids, TRAIN_DIR)
-
-    print("\nLoading validation images...")
-
-    X_validation = load_images_from_ids(
-        validation_ids,
-        TRAIN_DIR,
+    print(
+        pd.Series(
+            y_validation_names
+        ).value_counts().sort_index()
     )
 
     # --------------------------------------------------
-    # 6. Check the processed arrays
+    # Index image files once
+    # --------------------------------------------------
+
+    train_index = build_image_index(TRAIN_DIR)
+    test_index = build_image_index(TEST_DIR)
+
+    # Verify all required image IDs exist.
+    for ids, index, name in [
+        (
+            labels_df["image_id"].to_numpy(),
+            train_index,
+            "training"
+        ),
+        (
+            test_ids,
+            test_index,
+            "test"
+        )
+    ]:
+
+        missing = [
+            f"{int(image_id):05d}"
+            for image_id in ids
+            if f"{int(image_id):05d}" not in index
+        ]
+
+        if missing:
+            raise FileNotFoundError(
+                f"Missing {name} images. "
+                f"Examples: {missing[:10]}"
+            )
+
+    print(
+        "\nAll requested image files were found.",
+        flush=True
+    )
+
+    # --------------------------------------------------
+    # Create output folder
+    # --------------------------------------------------
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # --------------------------------------------------
+    # Process training images
+    # --------------------------------------------------
+
+    save_images(
+        train_ids,
+        train_index,
+        OUTPUT_DIR / "X_train.npy"
+    )
+
+    # --------------------------------------------------
+    # Process validation images
+    # --------------------------------------------------
+
+    save_images(
+        validation_ids,
+        train_index,
+        OUTPUT_DIR / "X_validation.npy"
+    )
+
+    # --------------------------------------------------
+    # Process provided test images separately
+    # --------------------------------------------------
+
+    save_images(
+        test_ids,
+        test_index,
+        OUTPUT_DIR / "X_test.npy"
+    )
+
+    # --------------------------------------------------
+    # Save labels, IDs and class mapping
+    # --------------------------------------------------
+
+    np.save(
+        OUTPUT_DIR / "y_train.npy",
+        y_train
+    )
+
+    np.save(
+        OUTPUT_DIR / "y_validation.npy",
+        y_validation
+    )
+
+    np.save(
+        OUTPUT_DIR / "train_ids.npy",
+        train_ids
+    )
+
+    np.save(
+        OUTPUT_DIR / "validation_ids.npy",
+        validation_ids
+    )
+
+    np.save(
+        OUTPUT_DIR / "test_ids.npy",
+        test_ids
+    )
+
+    np.save(
+        OUTPUT_DIR / "class_names.npy",
+        np.array(EXPECTED_CLASSES)
+    )
+
+    # --------------------------------------------------
+    # Verify saved arrays without loading all data
+    # into ordinary RAM
     # --------------------------------------------------
 
     print("\n" + "=" * 60)
-    print("PROCESSED DATA CHECKS")
+    print("VERIFYING SAVED ARRAYS")
     print("=" * 60)
 
-    print("X_train shape:", X_train.shape)
-    print("y_train shape:", y_train.shape)
+    for name in [
+        "X_train",
+        "X_validation",
+        "X_test"
+    ]:
 
-    print("X_validation shape:", X_validation.shape)
+        array = np.load(
+            OUTPUT_DIR / f"{name}.npy",
+            mmap_mode="r"
+        )
+
+        print(f"\n{name}:")
+        print("Shape:", array.shape)
+        print("Data type:", array.dtype)
+        print(
+            "Pixel range:",
+            int(array.min()),
+            "to",
+            int(array.max())
+        )
+
+        expected_shape = (
+            IMAGE_SIZE[1],
+            IMAGE_SIZE[0],
+            3
+        )
+
+        assert array.ndim == 4
+        assert array.shape[1:] == expected_shape
+        assert array.dtype == np.uint8
+
+        del array
+
+    print("\nLabel array checks:")
+
+    print("y_train shape:", y_train.shape)
     print("y_validation shape:", y_validation.shape)
 
-    print("Image data type:", X_train.dtype)
-    print("Label data type:", y_train.dtype)
+    assert len(y_train) == len(train_ids)
+    assert len(y_validation) == len(validation_ids)
 
-    print("Minimum pixel value:", X_train.min())
-    print("Maximum pixel value:", X_train.max())
+    assert y_train.min() >= 0
+    assert y_train.max() < len(EXPECTED_CLASSES)
 
-    assert X_train.ndim == 4
-    assert X_validation.ndim == 4
-
-    assert X_train.shape[1:] == (
-        IMAGE_SIZE[1],
-        IMAGE_SIZE[0],
-        3,
-    )
-
-    assert X_validation.shape[1:] == X_train.shape[1:]
-
-    assert len(X_train) == len(y_train)
-    assert len(X_validation) == len(y_validation)
-
-    assert np.isfinite(X_train).all()
-    assert np.isfinite(X_validation).all()
-
-    assert X_train.min() >= 0.0
-    assert X_train.max() <= 1.0
-
-    # --------------------------------------------------
-    # 7. Optional: preprocess test images separately
-    # --------------------------------------------------
-
-    # This prepares the test images for later prediction.
-    # It does not use test labels or include test images
-    # in training or validation.
-
-    print("\nLoading provided test images...")
-
-    test_ids = submission_df["image_id"].to_numpy()
-
-    X_test = load_images_from_ids(
-        test_ids,
-        TEST_DIR,
-    )
-
-    print("\nX_test shape:", X_test.shape)
-    print("Test data type:", X_test.dtype)
-
-    # --------------------------------------------------
-    # 8. Finish
-    # --------------------------------------------------
+    assert y_validation.min() >= 0
+    assert y_validation.max() < len(EXPECTED_CLASSES)
 
     print("\nPreprocessing completed successfully.")
-    print("Image size:", IMAGE_SIZE)
-    print("Number of classes:", len(class_to_index))
+    print("Saved files in:", OUTPUT_DIR)
 
     print(
-        "\nNote: Arrays currently exist in memory only. "
-        "No files have been saved."
+        "\nImages are stored as uint8 pixels (0-255). "
+        "Convert batches to float32 and divide by 255 "
+        "when training the model."
     )
 
 
