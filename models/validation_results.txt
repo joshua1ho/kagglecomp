@@ -1,0 +1,34 @@
+VALIDATION RESULTS
+==================
+
+Validation loss: 0.0626
+Validation accuracy: 0.9796
+Validation accuracy (%): 97.96%
+
+CLASSIFICATION REPORT
+              precision    recall  f1-score   support
+
+      CatEye     0.9818    0.9910    0.9864      2777
+     CatFace     0.9928    0.9921    0.9924      1388
+    CatMouth     0.9668    0.9661    0.9665      1388
+     CatNose     0.9604    0.9597    0.9600      1389
+      DogEye     0.9835    0.9767    0.9801      2316
+     DogFace     0.9991    0.9810    0.9900      1158
+    DogMouth     0.9734    0.9810    0.9772      1158
+     DogNose     0.9759    0.9801    0.9780      1158
+
+    accuracy                         0.9796     12732
+   macro avg     0.9792    0.9785    0.9788     12732
+weighted avg     0.9796    0.9796    0.9796     12732
+
+
+CONFUSION MATRIX
+          CatEye  CatFace  CatMouth  CatNose  DogEye  DogFace  DogMouth  DogNose
+CatEye      2752        1         2        9      11        0         1        1
+CatFace        4     1377         1        2       1        0         3        0
+CatMouth       3        2      1341       34       4        0         3        1
+CatNose       11        0        33     1333       8        0         1        3
+DogEye        29        1         5        7    2262        0         5        7
+DogFace        0        5         0        0       4     1136         9        4
+DogMouth       3        1         5        0       0        1      1136       12
+DogNose        1        0         0        3      10        0         9     1135
