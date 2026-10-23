@@ -1,0 +1,38 @@
+RESNET18 VALIDATION EVALUATION
+========================================
+
+Checkpoint: resnet18_best.pth
+Checkpoint epoch: 8
+Validation samples: 12732
+Validation loss: 0.017405
+Validation accuracy: 0.995130
+Validation accuracy percentage: 99.51%
+
+CLASSIFICATION REPORT
+----------------------------------------
+              precision    recall  f1-score   support
+
+      CatEye     0.9978    0.9960    0.9969      2777
+     CatFace     1.0000    1.0000    1.0000      1388
+    CatMouth     0.9920    0.9856    0.9888      1388
+     CatNose     0.9828    0.9892    0.9860      1389
+      DogEye     0.9940    0.9957    0.9948      2316
+     DogFace     1.0000    0.9991    0.9996      1158
+    DogMouth     0.9966    1.0000    0.9983      1158
+     DogNose     0.9974    0.9957    0.9965      1158
+
+    accuracy                         0.9951     12732
+   macro avg     0.9951    0.9952    0.9951     12732
+weighted avg     0.9951    0.9951    0.9951     12732
+
+PER-CLASS ACCURACY
+----------------------------------------
+   class  correct_predictions  total_samples  accuracy
+  CatEye                 2766           2777  0.996039
+ CatFace                 1388           1388  1.000000
+CatMouth                 1368           1388  0.985591
+ CatNose                 1374           1389  0.989201
+  DogEye                 2306           2316  0.995682
+ DogFace                 1157           1158  0.999136
+DogMouth                 1158           1158  1.000000
+ DogNose                 1153           1158  0.995682
