@@ -1,0 +1,3 @@
+model,epochs_recorded,best_loss_epoch,lowest_validation_loss,accuracy_at_best_loss,best_accuracy_epoch,highest_validation_accuracy
+Custom CNN,20,20,0.0626193057785048,0.979579013509268,20,0.979579013509268
+ResNet18,11,8,0.0174048442920315,0.9951303801445176,11,0.995444549167452
