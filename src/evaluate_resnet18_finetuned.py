@@ -23,7 +23,7 @@ DATA_DIR = PROJECT_DIR / "data" / "processed"
 MODEL_DIR = PROJECT_DIR / "models"
 
 # Load the fine-tuned checkpoint
-CHECKPOINT_PATH = MODEL_DIR / "resnet18_finetuned_best.pth"
+CHECKPOINT_PATH = MODEL_DIR / "resnet18_finetuned_v2_best.pth"
 
 BATCH_SIZE = 16
 
