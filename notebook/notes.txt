@@ -1,1 +1,82 @@
-initial sertup of the repo
+initial sertup of the repoKaggle Improvement Notes
+ENGE707 Facial Feature Classification Challenge
+================================================
+
+Current baseline
+----------------
+- Best reported Kaggle score: 0.9702
+- Latest reported submission score: 0.9692
+- Current main approach: ResNet18 / fine-tuned ResNet18
+- Classes:
+  CatEye, CatFace, CatMouth, CatNose,
+  DogEye, DogFace, DogMouth, DogNose
+
+Goal
+----
+Improve the public Kaggle score while keeping the current best submission
+and trained model as a fallback. Make one change at a time and record each
+result so experiments can be compared fairly.
+
+Suggested experiment order
+--------------------------
+
+1. Test-time augmentation (TTA)
+   - Start with the existing ResNet18 prediction script.
+   - Predict each test image normally and after a horizontal flip.
+   - Apply softmax to both outputs, average the probabilities, and select
+     the class with the highest average probability.
+   - Save the output to a new file, for example:
+       submission_resnet18_tta.csv
+   - Do not overwrite the best existing submission.
+   - TTA may help, but it is not guaranteed to improve the score.
+
+2. Check validation errors
+   - Run src/analyze_errors.py.
+   - Look for classes that are frequently confused with one another.
+   - Review examples of incorrect predictions and check whether the issue
+     could be image quality, class similarity, or label/data problems.
+   - Use the validation set for decisions rather than repeatedly tuning
+     against the public leaderboard.
+
+3. Fine-tuning experiments
+   - Try one change at a time, such as a lower learning rate
+     (for example, 1e-5 or 3e-5).
+   - Compare validation results with the current best checkpoint.
+   - Save the best checkpoint based on validation performance, not simply
+     the final training epoch.
+   - Keep the current checkpoint so the experiment can be reversed.
+
+4. Model ensemble
+   - If two trained models have different error patterns, combine their
+     class probabilities by averaging them.
+   - Only use models that have been evaluated consistently.
+   - Check validation performance before generating another Kaggle
+     submission; an ensemble is not automatically better.
+
+Before submitting to Kaggle
+---------------------------
+- Confirm the prediction CSV contains the expected number of test rows.
+- Confirm the column names match the competition's required format.
+- Confirm all predictions use the eight allowed class labels.
+- Check that image IDs are in the expected order and format.
+- Keep a copy of the best-scoring submission and its matching model.
+- Record the experiment and score below.
+
+Experiment log
+--------------
+Date | Change | Validation result | Kaggle score | Notes
+-----|--------|-------------------|--------------|------
+     | Baseline |                   | 0.9702 best  | Existing best
+     | TTA      |                   |              |
+     | Fine-tune|                   |              |
+     | Ensemble |                   |              |
+
+Important reminders
+-------------------
+- A higher training accuracy does not necessarily mean a higher Kaggle score.
+- Make one change at a time and compare it against the baseline.
+- Do not overwrite the best submission or checkpoint.
+- Kaggle public leaderboard scores can fluctuate and may not reflect
+  performance on the private leaderboard.
+- Follow the assessment rules and make sure you can explain your own
+  experiments, code changes, and results.
