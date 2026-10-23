@@ -20,10 +20,14 @@ MODEL_DIR = PROJECT_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 BATCH_SIZE = 16
-EPOCHS = 12
-LEARNING_RATE = 0.0001
+EPOCHS = 8
+LEARNING_RATE = 0.00003
 PATIENCE = 3
 SEED = 42
+
+CHECKPOINT_PATH = MODEL_DIR / "resnet18_best.pth"
+FINETUNED_PATH = MODEL_DIR / "resnet18_finetuned_best.pth"
+HISTORY_PATH = MODEL_DIR / "resnet18_finetune_history.csv"
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -70,9 +74,12 @@ validation_transform = transforms.Compose([
 
 class FacialFeatureDataset(Dataset):
 
-    def __init__(self, image_file, label_file=None,
-                 transform=None):
-
+    def __init__(
+        self,
+        image_file,
+        label_file=None,
+        transform=None
+    ):
         self.images = np.load(
             image_file,
             mmap_mode="r"
@@ -109,6 +116,10 @@ class FacialFeatureDataset(Dataset):
         return image, int(self.labels[index])
 
 
+# ==========================================
+# LOAD DATA
+# ==========================================
+
 train_dataset = FacialFeatureDataset(
     DATA_DIR / "X_train.npy",
     DATA_DIR / "y_train.npy",
@@ -137,21 +148,61 @@ validation_loader = DataLoader(
     pin_memory=torch.cuda.is_available()
 )
 
+print("Training samples:", len(train_dataset))
+print("Validation samples:", len(validation_dataset))
+
 
 # ==========================================
-# PRETRAINED RESNET18
+# LOAD EXISTING RESNET18 CHECKPOINT
 # ==========================================
 
-weights = models.ResNet18_Weights.DEFAULT
-model = models.resnet18(weights=weights)
+if not CHECKPOINT_PATH.exists():
+    raise FileNotFoundError(
+        f"Checkpoint not found: {CHECKPOINT_PATH}\n"
+        "Run src/train_resnet18.py first."
+    )
 
-# Replace ImageNet's 1000-class output with our 8 classes.
+# Recreate the same architecture.
+model = models.resnet18(weights=None)
+
 model.fc = nn.Linear(
     model.fc.in_features,
     len(CLASS_NAMES)
 )
 
+# Load your previously trained model.
+checkpoint = torch.load(
+    CHECKPOINT_PATH,
+    map_location=DEVICE,
+    weights_only=True
+)
+
+if checkpoint["class_names"] != CLASS_NAMES:
+    raise ValueError(
+        "Checkpoint class names do not match the dataset."
+    )
+
+model.load_state_dict(
+    checkpoint["model_state_dict"]
+)
+
 model = model.to(DEVICE)
+
+print("Loaded checkpoint:", CHECKPOINT_PATH)
+print("Previous best epoch:", checkpoint["epoch"])
+print(
+    "Previous validation accuracy:",
+    f'{checkpoint["validation_accuracy"]:.4f}'
+)
+print(
+    "Previous validation loss:",
+    f'{checkpoint["validation_loss"]:.4f}'
+)
+
+
+# ==========================================
+# LOSS, OPTIMIZER AND SCHEDULER
+# ==========================================
 
 criterion = nn.CrossEntropyLoss()
 
@@ -169,18 +220,20 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 
 
 # ==========================================
-# TRAINING
+# FINE-TUNING
 # ==========================================
 
 best_val_loss = float("inf")
+best_val_accuracy = 0.0
 epochs_without_improvement = 0
 history = []
 
-checkpoint_path = MODEL_DIR / "resnet18_best.pth"
-
 for epoch in range(1, EPOCHS + 1):
 
-    # ----- Training -----
+    # --------------------------------------
+    # TRAINING
+    # --------------------------------------
+
     model.train()
 
     train_loss_sum = 0.0
@@ -203,6 +256,7 @@ for epoch in range(1, EPOCHS + 1):
         batch_size = labels.size(0)
 
         train_loss_sum += loss.item() * batch_size
+
         train_correct += (
             outputs.argmax(dim=1) == labels
         ).sum().item()
@@ -212,7 +266,10 @@ for epoch in range(1, EPOCHS + 1):
     train_loss = train_loss_sum / train_total
     train_accuracy = train_correct / train_total
 
-    # ----- Validation -----
+    # --------------------------------------
+    # VALIDATION
+    # --------------------------------------
+
     model.eval()
 
     val_loss_sum = 0.0
@@ -232,6 +289,7 @@ for epoch in range(1, EPOCHS + 1):
             batch_size = labels.size(0)
 
             val_loss_sum += loss.item() * batch_size
+
             val_correct += (
                 outputs.argmax(dim=1) == labels
             ).sum().item()
@@ -241,6 +299,7 @@ for epoch in range(1, EPOCHS + 1):
     val_loss = val_loss_sum / val_total
     val_accuracy = val_correct / val_total
 
+    # Adjust learning rate when validation loss stalls.
     scheduler.step(val_loss)
 
     current_lr = optimizer.param_groups[0]["lr"]
@@ -264,14 +323,20 @@ for epoch in range(1, EPOCHS + 1):
     })
 
     pd.DataFrame(history).to_csv(
-        MODEL_DIR / "resnet18_history.csv",
+        HISTORY_PATH,
         index=False
     )
 
-    # Save the checkpoint with the lowest validation loss.
+    # --------------------------------------
+    # SAVE BEST CHECKPOINT
+    # --------------------------------------
+
+    # Select by validation loss, consistent with
+    # the original training script.
     if val_loss < best_val_loss:
 
         best_val_loss = val_loss
+        best_val_accuracy = val_accuracy
         epochs_without_improvement = 0
 
         torch.save({
@@ -280,9 +345,9 @@ for epoch in range(1, EPOCHS + 1):
             "epoch": epoch,
             "validation_loss": val_loss,
             "validation_accuracy": val_accuracy
-        }, checkpoint_path)
+        }, FINETUNED_PATH)
 
-        print("  Saved new best ResNet18 checkpoint.")
+        print("  Saved new best fine-tuned checkpoint.")
 
     else:
         epochs_without_improvement += 1
@@ -292,7 +357,12 @@ for epoch in range(1, EPOCHS + 1):
         break
 
 
-print("\nTraining finished.")
-print("Best validation loss:", best_val_loss)
-print("Checkpoint:", checkpoint_path)
-print("History:", MODEL_DIR / "resnet18_history.csv")
+# ==========================================
+# FINISHED
+# ==========================================
+
+print("\nFine-tuning finished.")
+print(f"Best validation loss: {best_val_loss:.6f}")
+print(f"Accuracy at that checkpoint: {best_val_accuracy:.4%}")
+print("Checkpoint:", FINETUNED_PATH)
+print("History:", HISTORY_PATH)
