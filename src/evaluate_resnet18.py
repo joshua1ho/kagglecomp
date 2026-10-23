@@ -23,7 +23,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_DIR / "data" / "processed"
 MODEL_DIR = PROJECT_DIR / "models"
 
-CHECKPOINT_PATH = MODEL_DIR / "resnet18_best.pth"
+CHECKPOINT_PATH = MODEL_DIR / "resnet18_finetuned_best.pth"
 BATCH_SIZE = 16
 
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,6 @@ print("Classes:", CLASS_NAMES)
 
 # ==========================================
 # VALIDATION TRANSFORM
-# Must match ResNet18 training preprocessing
 # ==========================================
 
 imagenet_mean = [0.485, 0.456, 0.406]
@@ -71,17 +70,8 @@ validation_transform = transforms.Compose([
 
 class FacialFeatureDataset(Dataset):
 
-    def __init__(
-        self,
-        image_file,
-        label_file,
-        transform=None
-    ):
-        self.images = np.load(
-            image_file,
-            mmap_mode="r"
-        )
-
+    def __init__(self, image_file, label_file, transform=None):
+        self.images = np.load(image_file, mmap_mode="r")
         self.labels = np.load(label_file)
         self.transform = transform
 
@@ -89,14 +79,12 @@ class FacialFeatureDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, index):
-
         image = np.array(
             self.images[index],
             dtype=np.uint8,
             copy=True
         )
 
-        # Convert H x W x C to C x H x W.
         image = torch.from_numpy(image)
         image = image.permute(2, 0, 1).float() / 255.0
 
@@ -130,12 +118,13 @@ print("Validation samples:", len(validation_dataset))
 
 
 # ==========================================
-# LOAD TRAINED RESNET18
+# LOAD FINE-TUNED RESNET18
 # ==========================================
 
 if not CHECKPOINT_PATH.exists():
     raise FileNotFoundError(
-        f"Checkpoint not found: {CHECKPOINT_PATH}"
+        f"Fine-tuned checkpoint not found: {CHECKPOINT_PATH}\n"
+        "Run src/train_resnet18_finetune.py first."
     )
 
 checkpoint = torch.load(
@@ -156,10 +145,7 @@ model.fc = nn.Linear(
     NUM_CLASSES
 )
 
-model.load_state_dict(
-    checkpoint["model_state_dict"]
-)
-
+model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(DEVICE)
 model.eval()
 
@@ -175,7 +161,6 @@ if "epoch" in checkpoint:
 
 all_labels = []
 all_predictions = []
-all_probabilities = []
 
 total_loss = 0.0
 total_samples = 0
@@ -183,18 +168,14 @@ total_samples = 0
 criterion = nn.CrossEntropyLoss()
 
 with torch.no_grad():
-
     for images, labels in validation_loader:
-
         images = images.to(DEVICE)
         labels = labels.to(DEVICE)
 
         outputs = model(images)
         loss = criterion(outputs, labels)
 
-        probabilities = torch.softmax(outputs, dim=1)
         predictions = outputs.argmax(dim=1)
-
         batch_size = labels.size(0)
 
         total_loss += loss.item() * batch_size
@@ -202,19 +183,15 @@ with torch.no_grad():
 
         all_labels.extend(labels.cpu().numpy())
         all_predictions.extend(predictions.cpu().numpy())
-        all_probabilities.extend(probabilities.cpu().numpy())
 
-
-# Convert collected predictions to NumPy arrays.
 y_true = np.array(all_labels)
 y_pred = np.array(all_predictions)
-y_prob = np.array(all_probabilities)
 
 average_loss = total_loss / total_samples
 accuracy = accuracy_score(y_true, y_pred)
 
 print("\n" + "=" * 55)
-print("RESNET18 VALIDATION RESULTS")
+print("FINE-TUNED RESNET18 VALIDATION RESULTS")
 print("=" * 55)
 
 print("Number of samples:", total_samples)
@@ -225,6 +202,15 @@ print(f"Validation accuracy: {accuracy:.4%}")
 # ==========================================
 # CLASSIFICATION REPORT
 # ==========================================
+
+report_text = classification_report(
+    y_true,
+    y_pred,
+    labels=list(range(NUM_CLASSES)),
+    target_names=CLASS_NAMES,
+    digits=4,
+    zero_division=0
+)
 
 report = classification_report(
     y_true,
@@ -238,19 +224,11 @@ report = classification_report(
 report_df = pd.DataFrame(report).transpose()
 
 print("\nClassification report:")
-print(
-    classification_report(
-        y_true,
-        y_pred,
-        labels=list(range(NUM_CLASSES)),
-        target_names=CLASS_NAMES,
-        digits=4,
-        zero_division=0
-    )
+print(report_text)
+
+report_path = (
+    MODEL_DIR / "resnet18_finetuned_classification_report.csv"
 )
-
-report_path = MODEL_DIR / "resnet18_classification_report.csv"
-
 report_df.to_csv(report_path, index=True)
 
 
@@ -270,10 +248,10 @@ cm_df = pd.DataFrame(
     columns=CLASS_NAMES
 )
 
-cm_path = MODEL_DIR / "resnet18_confusion_matrix.csv"
+cm_path = MODEL_DIR / "resnet18_finetuned_confusion_matrix.csv"
 cm_df.to_csv(cm_path, index=True)
 
-print("Confusion matrix:")
+print("\nConfusion matrix:")
 print(cm_df)
 
 
@@ -308,7 +286,9 @@ print(
     )
 )
 
-class_accuracy_path = MODEL_DIR / "resnet18_class_accuracy.csv"
+class_accuracy_path = (
+    MODEL_DIR / "resnet18_finetuned_class_accuracy.csv"
+)
 class_accuracy_df.to_csv(class_accuracy_path, index=False)
 
 
@@ -328,7 +308,7 @@ ax.set(
     yticklabels=CLASS_NAMES,
     xlabel="Predicted class",
     ylabel="True class",
-    title="ResNet18 Validation Confusion Matrix"
+    title="Fine-Tuned ResNet18 Validation Confusion Matrix"
 )
 
 plt.setp(
@@ -338,7 +318,6 @@ plt.setp(
     rotation_mode="anchor"
 )
 
-# Write the number of predictions in each cell.
 threshold = cm.max() / 2 if cm.size else 0
 
 for row in range(NUM_CLASSES):
@@ -354,7 +333,9 @@ for row in range(NUM_CLASSES):
 
 fig.tight_layout()
 
-confusion_plot_path = MODEL_DIR / "resnet18_confusion_matrix.png"
+confusion_plot_path = (
+    MODEL_DIR / "resnet18_finetuned_confusion_matrix.png"
+)
 
 fig.savefig(
     confusion_plot_path,
@@ -369,15 +350,18 @@ plt.close(fig)
 # SAVE SUMMARY
 # ==========================================
 
-summary_path = MODEL_DIR / "resnet18_evaluation_summary.txt"
+summary_path = (
+    MODEL_DIR / "resnet18_finetuned_evaluation_summary.txt"
+)
 
 with open(summary_path, "w", encoding="utf-8") as file:
-
-    file.write("RESNET18 VALIDATION EVALUATION\n")
-    file.write("=" * 40 + "\n\n")
+    file.write("FINE-TUNED RESNET18 VALIDATION EVALUATION\n")
+    file.write("=" * 45 + "\n\n")
 
     file.write(f"Checkpoint: {CHECKPOINT_PATH.name}\n")
-    file.write(f"Checkpoint epoch: {checkpoint.get('epoch', 'Unknown')}\n")
+    file.write(
+        f"Checkpoint epoch: {checkpoint.get('epoch', 'Unknown')}\n"
+    )
     file.write(f"Validation samples: {total_samples}\n")
     file.write(f"Validation loss: {average_loss:.6f}\n")
     file.write(f"Validation accuracy: {accuracy:.6f}\n")
@@ -385,17 +369,7 @@ with open(summary_path, "w", encoding="utf-8") as file:
 
     file.write("CLASSIFICATION REPORT\n")
     file.write("-" * 40 + "\n")
-
-    file.write(
-        classification_report(
-            y_true,
-            y_pred,
-            labels=list(range(NUM_CLASSES)),
-            target_names=CLASS_NAMES,
-            digits=4,
-            zero_division=0
-        )
-    )
+    file.write(report_text)
 
     file.write("\nPER-CLASS ACCURACY\n")
     file.write("-" * 40 + "\n")
